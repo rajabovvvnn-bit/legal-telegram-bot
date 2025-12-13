@@ -20,7 +20,7 @@ const openai = new OpenAI({
 });
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const geminiModel = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+const geminiModel = genAI.getGenerativeModel({ model: "gemini-pro" });
 
 // Kanal sozlamalari
 const CHANNEL_USERNAME = "@termezadvokat";
