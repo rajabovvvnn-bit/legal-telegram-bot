@@ -75,14 +75,28 @@ function checkDailyLimit(userId) {
 function isSimpleGreeting(text) {
   const greetings = [
     'салом', 'ассалому алайкум', 'salom', 'assalomu alaykum',
-    'хайр', 'хуш', 'xayr', 'xush', 
-    'раҳмат', 'кўп раҳмат', 'rahmat', "ko'p rahmat", 'tashakkur',
-    'яхши', 'yaxshi', 'зўр', "zo'r",
-    'қандай', 'qanday', 'нима гап', 'nima gap'
+    'хайр', 'хуш', 'xayr', 'xush'
   ];
   
+  const thanks = ['раҳмат', 'rahmat', 'tashakkur', 'кўп раҳмат', "ko'p rahmat"];
+  
   const lowerText = text.toLowerCase().trim();
-  return greetings.some(greeting => lowerText.includes(greeting) && lowerText.length < 30);
+  
+  // Agar savol belgisi yoki "qanday", "nima" bo'lsa - bu savol, salomlashish emas
+  if (lowerText.includes('?') || lowerText.includes('қандай') || 
+      lowerText.includes('qanday') || lowerText.includes('нима') || 
+      lowerText.includes('nima') || lowerText.includes('қилиш') ||
+      lowerText.includes('qilish')) {
+    return false;
+  }
+  
+  // Faqat qisqa salomlashishlar (15 so'zdan kam)
+  if (lowerText.split(' ').length > 15) {
+    return false;
+  }
+  
+  return greetings.some(greeting => lowerText.includes(greeting)) ||
+         thanks.some(thank => lowerText.includes(thank));
 }
 
 // Murakkab savol (OpenAI kerak)
@@ -116,14 +130,8 @@ function getSimpleResponse(text) {
     return 'Арзимайди! Яна саволларингиз бўлса, беришингиз мумкин. 😊';
   }
   
-  if (lowerText.includes('яхши') || lowerText.includes('yaxshi') || 
-      lowerText.includes('зўр') || lowerText.includes("zo'r")) {
-    return 'Мен яхшиман, раҳмат! Сизга қандай ёрдам бера оламан? 😊';
-  }
-  
-  if (lowerText.includes('қандай') || lowerText.includes('qanday') || 
-      lowerText.includes('нима гап') || lowerText.includes('nima gap')) {
-    return 'Яхши, раҳмат! Юридик саволларингизни беришингиз мумкин. 👨‍⚖️';
+  if (lowerText.includes('хайр') || lowerText.includes('xayr')) {
+    return 'Хайр! Муваффаққиятлар тилайман! 👋';
   }
   
   return null;
@@ -295,30 +303,45 @@ bot.on("message", async (msg) => {
     // 3. ODDIY/O'RTACHA SAVOL → Gemini (bepul)
     else {
       console.log(`[Gemini] Oddiy savol: ${question.substring(0, 50)}...`);
-      answer = await getGeminiResponse(question);
-      aiUsed = "Google Gemini";
+      try {
+        answer = await getGeminiResponse(question);
+        aiUsed = "Google Gemini (бепул)";
+      } catch (geminiError) {
+        console.error('[Gemini xatosi, OpenAI ga o\'tish]:', geminiError.message);
+        answer = await getOpenAIResponse(question);
+        aiUsed = "OpenAI GPT-4o-mini (fallback)";
+      }
     }
 
+    // Javobni yuborish (AI nomini albatta ko'rsatish)
     await bot.sendMessage(chatId, 
-      answer + `\n\n───────────\n🤖 _${aiUsed}_`,
+      `${answer}\n\n───────────\n🤖 _${aiUsed}_`,
       { parse_mode: 'Markdown' }
     );
 
   } catch (error) {
     console.error('AI xatosi:', error);
     
-    // Agar bitta AI ishlamasa, ikkinchisini sinab ko'ramiz
+    // Fallback: ikkinchi AI ni sinash
     try {
       console.log('[Fallback] Boshqa AI ga urinish...');
       const fallbackAnswer = isComplexQuestion(question) 
         ? await getGeminiResponse(question)
         : await getOpenAIResponse(question);
       
-      await bot.sendMessage(chatId, fallbackAnswer);
+      const fallbackAI = isComplexQuestion(question) 
+        ? "Google Gemini (fallback)" 
+        : "OpenAI GPT-4o-mini (fallback)";
+      
+      await bot.sendMessage(chatId, 
+        `${fallbackAnswer}\n\n───────────\n🤖 _${fallbackAI}_`,
+        { parse_mode: 'Markdown' }
+      );
     } catch (fallbackError) {
       console.error('Fallback xatosi:', fallbackError);
       await bot.sendMessage(chatId,
         `❌ Кечирасиз, жавоб беришда хатолик юз берди.\n\n` +
+        `Хато: ${fallbackError.message}\n\n` +
         `Илтимос, бироз кутиб, қайта уриниб кўринг ёки каналимизга хабар қилинг:\n` +
         `${CHANNEL_USERNAME}`
       );
