@@ -1,5 +1,6 @@
 import TelegramBot from "node-telegram-bot-api";
 import OpenAI from "openai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import express from "express";
 
 const app = express();
@@ -13,37 +14,180 @@ const bot = new TelegramBot(process.env.BOT_TOKEN, {
 const WEBHOOK_URL = process.env.WEBHOOK_URL || `https://legal-telegram-bot.onrender.com`;
 bot.setWebHook(`${WEBHOOK_URL}/bot${process.env.BOT_TOKEN}`);
 
-// OpenAI sozlamalari
+// AI sozlamalari
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-// Kanal username
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const geminiModel = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+
+// Kanal sozlamalari
 const CHANNEL_USERNAME = "@termezadvokat";
+
+// Foydalanuvchilar uchun kunlik limit (xotirada saqlanadi)
+const userDailyLimits = new Map();
+const DAILY_LIMIT = 10; // Kuniga 10 ta savol
 
 // Express middleware
 app.use(express.json());
 
-// Health check
 app.get('/', (req, res) => {
-  res.send('Legal Telegram Bot ishlayapti! ✅');
+  res.send('Legal Telegram Bot ishlayapti! ✅ (Hybrid: Gemini + OpenAI)');
 });
 
-// Webhook endpoint
 app.post(`/bot${process.env.BOT_TOKEN}`, (req, res) => {
   bot.processUpdate(req.body);
   res.sendStatus(200);
 });
 
-// Kanalga obuna tekshirish funksiyasi
+// Kanalga obuna tekshirish
 async function checkChannelSubscription(userId) {
   try {
     const member = await bot.getChatMember(CHANNEL_USERNAME, userId);
-    // Agar a'zo bo'lsa yoki admin bo'lsa - true qaytaradi
     return ['member', 'administrator', 'creator'].includes(member.status);
   } catch (error) {
     console.error('Obuna tekshiruvida xato:', error);
     return false;
+  }
+}
+
+// Kunlik limitni tekshirish
+function checkDailyLimit(userId) {
+  const today = new Date().toDateString();
+  const userKey = `${userId}_${today}`;
+  
+  if (!userDailyLimits.has(userKey)) {
+    userDailyLimits.set(userKey, 0);
+  }
+  
+  const count = userDailyLimits.get(userKey);
+  
+  if (count >= DAILY_LIMIT) {
+    return false;
+  }
+  
+  userDailyLimits.set(userKey, count + 1);
+  return true;
+}
+
+// Oddiy muloqot (salom, rahmat va h.k.)
+function isSimpleGreeting(text) {
+  const greetings = [
+    'салом', 'ассалому алайкум', 'salom', 'assalomu alaykum',
+    'хайр', 'хуш', 'xayr', 'xush', 
+    'раҳмат', 'кўп раҳмат', 'rahmat', "ko'p rahmat", 'tashakkur',
+    'яхши', 'yaxshi', 'зўр', "zo'r",
+    'қандай', 'qanday', 'нима гап', 'nima gap'
+  ];
+  
+  const lowerText = text.toLowerCase().trim();
+  return greetings.some(greeting => lowerText.includes(greeting) && lowerText.length < 30);
+}
+
+// Murakkab savol (OpenAI kerak)
+function isComplexQuestion(text) {
+  const complexKeywords = [
+    'зўравонлик', "zo'ravonlik", 'калтаклаш', 'kaltaklash',
+    'жиноят', 'jinoyat', 'жиноий', 'jinoiy',
+    'судга', 'sudga', 'суд', 'sud', 'арз', 'arz',
+    'ҳибс', 'hibs', 'қамоқ', 'qamoq',
+    'тергов', 'tergov', 'полиция', 'politsiya',
+    'ички ишлар', 'ichki ishlar',
+    'жиноий иш', 'jinoiy ish',
+    'прокуратура', 'prokuratura'
+  ];
+  
+  const lowerText = text.toLowerCase();
+  return complexKeywords.some(keyword => lowerText.includes(keyword));
+}
+
+// Oddiy muloqotga javob
+function getSimpleResponse(text) {
+  const lowerText = text.toLowerCase();
+  
+  if (lowerText.includes('салом') || lowerText.includes('salom') || 
+      lowerText.includes('ассалому') || lowerText.includes('assalomu')) {
+    return 'Ваалайкум ассалом! Саволингизни беринг. 😊';
+  }
+  
+  if (lowerText.includes('раҳмат') || lowerText.includes('rahmat') || 
+      lowerText.includes('ташаккур') || lowerText.includes('tashakkur')) {
+    return 'Арзимайди! Яна саволларингиз бўлса, беришингиз мумкин. 😊';
+  }
+  
+  if (lowerText.includes('яхши') || lowerText.includes('yaxshi') || 
+      lowerText.includes('зўр') || lowerText.includes("zo'r")) {
+    return 'Мен яхшиман, раҳмат! Сизга қандай ёрдам бера оламан? 😊';
+  }
+  
+  if (lowerText.includes('қандай') || lowerText.includes('qanday') || 
+      lowerText.includes('нима гап') || lowerText.includes('nima gap')) {
+    return 'Яхши, раҳмат! Юридик саволларингизни беришингиз мумкин. 👨‍⚖️';
+  }
+  
+  return null;
+}
+
+// Gemini bilan javob olish
+async function getGeminiResponse(question) {
+  const prompt = `Сиз Ўзбекистон Республикаси қонунчилиги бўйича профессионал юрист ассистентисиз.
+
+ҚОИДАЛАР:
+1. Фақат ўзбекча жавоб беринг
+2. Жавобни қисқа, аниқ ва фойдали қилинг (3-5 параграф)
+3. Тегишли қонун/кодекс моддасига ҳавола беринг
+4. Амалий кўрсатма беринг (қандай ҳаракат қилиш керак)
+5. Мураккаб ҳолатларда профессионал адвокатга мурожаат қилишни тавсия этинг
+
+АСОСИЙ ҚОНУНЛАР: Конституция, Фуқаролик кодекси (ФК), Оила кодекси (ОК), Меҳнат кодекси (МК), Жиноят кодекси (ЖК), Маъмурий жавобгарлик кодекси.
+
+Савол: ${question}
+
+Жавоб:`;
+
+  try {
+    const result = await geminiModel.generateContent(prompt);
+    const response = await result.response;
+    return response.text();
+  } catch (error) {
+    console.error('Gemini xatosi:', error);
+    throw error;
+  }
+}
+
+// OpenAI bilan javob olish (murakkab savollar uchun)
+async function getOpenAIResponse(question) {
+  try {
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        {
+          role: "system",
+          content: `Сиз Ўзбекистон Республикаси қонунчилиги бўйича юқори малакали юрист ва маслаҳатчисиз. Мураккаб юридик ҳолатларда чуқур таҳлил ва самимий ёрдам берасиз.
+
+ВАЗИФАЛАР:
+1. Самимий ва эмпатик мулоқот
+2. Чуқур юридик таҳлил
+3. Кодекс моддаларига аниқ ҳавола
+4. Психологик жиҳатни ҳам ҳисобга олиш
+5. Қадам-ба-қадам йўл-йўриқ
+6. Хавфсизлик ва ҳуқуқларни ҳимоя қилиш бўйича маслаҳат
+
+АСОСИЙ ҚОНУНЛАР: Конституция, Фуқаролик, Оила, Меҳнат, Жиноят кодекслари.
+
+Мураккаб ҳолатларда батафсил ва ҳамдардлик билан жавоб беринг.`
+        },
+        { role: "user", content: question }
+      ],
+      temperature: 0.8,
+      max_tokens: 2000,
+    });
+
+    return response.choices[0].message.content;
+  } catch (error) {
+    console.error('OpenAI xatosi:', error);
+    throw error;
   }
 }
 
@@ -53,7 +197,6 @@ bot.onText(/\/start/, async (msg) => {
   const userId = msg.from.id;
   const firstName = msg.from.first_name || "Foydalanuvchi";
   
-  // Kanalga obuna tekshiruvi
   const isSubscribed = await checkChannelSubscription(userId);
   
   if (!isSubscribed) {
@@ -74,34 +217,33 @@ bot.onText(/\/start/, async (msg) => {
     return;
   }
   
-  // Agar obuna bo'lgan bo'lsa
   await bot.sendMessage(chatId,
     `Ассалому алайкум, ${firstName}! Хуш келибсиз! 👋\n\n` +
-    `Мен юридик маслаҳат берувчи ботман. Сизга Ўзбекистон Республикаси қонунчилиги бўйича саволларга жавоб бера оламан. 👨‍⚖️\n\n` +
-    `📋 Мен қуйидаги соҳаларда ёрдам бера оламан:\n` +
+    `Мен юридик маслаҳат берувчи ботман (AI асосида). 🤖👨‍⚖️\n\n` +
+    `📋 Ёрдам бера оладиган соҳалар:\n` +
     `• Фуқаролик ҳуқуқи\n` +
     `• Оила ҳуқуқи\n` +
     `• Меҳнат ҳуқуқи\n` +
     `• Мулк ҳуқуқи\n` +
     `• Жиноят ҳуқуқи\n` +
     `• Маъмурий ҳуқуқ\n\n` +
-    `❓ Саволингизни ёзинг, мен тезкор жавоб бераман!`
+    `⚡ Кунига ${DAILY_LIMIT} та саволга жавоб бера оламан.\n\n` +
+    `❓ Саволингизни ёзинг!`
   );
 });
 
-// Oddiy xabarlarni qayta ishlash
+// Xabarlarni qayta ishlash
 bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
   const question = msg.text;
   const firstName = msg.from.first_name || "Foydalanuvchi";
 
-  // Agar buyruq bo'lsa, o'tkazib yuborish
   if (!question || question.startsWith('/')) {
     return;
   }
 
-  // Kanalga obuna tekshiruvi
+  // Obuna tekshiruvi
   const isSubscribed = await checkChannelSubscription(userId);
   
   if (!isSubscribed) {
@@ -119,81 +261,75 @@ bot.on("message", async (msg) => {
     return;
   }
 
-  // "Yozmoqda..." holatini ko'rsatish
+  // 1. ODDIY MULOQOT (avtomatik javob)
+  if (isSimpleGreeting(question)) {
+    const simpleResponse = getSimpleResponse(question);
+    if (simpleResponse) {
+      await bot.sendMessage(chatId, simpleResponse);
+      return;
+    }
+  }
+
+  // Kunlik limitni tekshirish
+  if (!checkDailyLimit(userId)) {
+    await bot.sendMessage(chatId,
+      `${firstName}, афсуски, сиз бугунги кунлик лимитни (${DAILY_LIMIT} та савол) тўлдирдингиз. 😔\n\n` +
+      `Эртага қайта уриниб кўринг ёки каналимизда бошқа фойдали маълумотларни кўринг:\n` +
+      `${CHANNEL_USERNAME}`
+    );
+    return;
+  }
+
   await bot.sendChatAction(chatId, 'typing');
 
   try {
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        {
-          role: "system",
-          content: `Сиз Ўзбекистон Республикаси қонунчилиги бўйича профессионал юрист ва маслаҳатчисиз. Сизнинг вазифангиз - фойдаланувчиларга ўзбекча тилида аниқ, тушунарли ва фойдали юридик маслаҳатлар бериш.
+    let answer;
+    let aiUsed;
 
-🎯 АСОСИЙ ВАЗИФАЛАР:
+    // 2. MURAKKAB SAVOL → OpenAI
+    if (isComplexQuestion(question)) {
+      console.log(`[OpenAI] Murakkab savol: ${question.substring(0, 50)}...`);
+      answer = await getOpenAIResponse(question);
+      aiUsed = "OpenAI GPT-4o-mini";
+    } 
+    // 3. ODDIY/O'RTACHA SAVOL → Gemini (bepul)
+    else {
+      console.log(`[Gemini] Oddiy savol: ${question.substring(0, 50)}...`);
+      answer = await getGeminiResponse(question);
+      aiUsed = "Google Gemini";
+    }
 
-1. **Самимий мулоқот**: Фойдаланувчи билан ҳурмат ва самимийлик билан мулоқот қилинг. Керак бўлса, исми билан мурожаат қилинг.
-
-2. **Аниқ жавоблар**: Жавобларни қисқа, лўнда ва тушунарли қилиб беринг. Юридик жаргонларни оддий тилда тушунтиринг.
-
-3. **Қонунга асосланган**: Барча жавобларни Ўзбекистон Республикаси қонунчилигига (Фуқаролик кодекси, Оила кодекси, Меҳнат кодекси, Жиноят кодекси ва б.) асосланг.
-
-4. **Кодекс моддаларига ҳавола**: Имкон қадар тегишли қонун ёки кодекс моддасига аниқ ҳавола беринг. Масалан: "Фуқаролик кодексининг 1-моддасига кўра..."
-
-5. **Амалий кўрсатмалар**: Фойдаланувчига қандай ҳаракат қилиш кераклигини аниқ кўрсатиб беринг (қайси ҳужжатлар керак, қаерга мурожаат қилиш керак).
-
-6. **Профессионал огоҳлантириш**: Агар савол жуда мураккаб бўлса ёки аниқ ҳолатга боғлиқ бўлса, охирида шахсий адвокат билан маслаҳатлашишни тавсия қилинг.
-
-7. **Билмаганингизни тан олинг**: Агар савол сизнинг билимингиздан ташқарида бўлса, очиқ айтинг ва мутахассисга мурожаат қилишни тавсия беринг.
-
-📚 АСОСИЙ ҚОНУНЛАР:
-- Ўзбекистон Республикаси Конституцияси
-- Фуқаролик кодекси (ФК)
-- Оила кодекси (ОК)
-- Меҳнат кодекси (МК)
-- Жиноят кодекси (ЖК)
-- Маъмурий жавобгарлик тўғрисида кодекс
-- Фуқаролик процессуал кодекси
-- Жиноят процессуал кодекси
-
-🎨 ЖАВОБ ФОРМАТИ:
-- Саломлашинг (агар керак бўлса)
-- Қисқа ва аниқ жавоб
-- Қонун/кодекс моддасига ҳавола
-- Амалий кўрсатма
-- Керак бўлса, адвокат маслаҳати (мураккаб ҳолатларда)
-
-💡 ЭСЛАТМА: 
-Сиз умумий маълумот ва консултация берасиз. Ҳар бир ҳолат индивидуал, шунинг учун аниқ вазиятларда профессионал юрист маслаҳати зарур.
-
-Энди фойдаланувчининг саволига жавоб беринг - самимий, аниқ ва фойдали!`
-        },
-        { role: "user", content: question }
-      ],
-      temperature: 0.7,
-      max_tokens: 1500,
-    });
-
-    const answer = response.choices[0].message.content;
-    
-    // Javobni yuborish
-    await bot.sendMessage(chatId, answer, {
-      parse_mode: 'Markdown'
-    });
-
-  } catch (err) {
-    console.error('Xatolik:', err);
-    await bot.sendMessage(
-      chatId,
-      `❌ Кечирасиз, жавоб беришда хатолик юз берди. Илтимос, саволингизни қайта юборинг ёки бироз кутиб туринг.\n\n` +
-      `Агар муаммо давом этса, каналимизга хабар беринг: ${CHANNEL_USERNAME}`
+    await bot.sendMessage(chatId, 
+      answer + `\n\n───────────\n🤖 _${aiUsed}_`,
+      { parse_mode: 'Markdown' }
     );
+
+  } catch (error) {
+    console.error('AI xatosi:', error);
+    
+    // Agar bitta AI ishlamasa, ikkinchisini sinab ko'ramiz
+    try {
+      console.log('[Fallback] Boshqa AI ga urinish...');
+      const fallbackAnswer = isComplexQuestion(question) 
+        ? await getGeminiResponse(question)
+        : await getOpenAIResponse(question);
+      
+      await bot.sendMessage(chatId, fallbackAnswer);
+    } catch (fallbackError) {
+      console.error('Fallback xatosi:', fallbackError);
+      await bot.sendMessage(chatId,
+        `❌ Кечирасиз, жавоб беришда хатолик юз берди.\n\n` +
+        `Илтимос, бироз кутиб, қайта уриниб кўринг ёки каналимизга хабар қилинг:\n` +
+        `${CHANNEL_USERNAME}`
+      );
+    }
   }
 });
 
-// Serverni ishga tushirish
+// Server
 app.listen(PORT, () => {
-  console.log(`Server ${PORT}-portda ishlamoqda`);
-  console.log(`Webhook URL: ${WEBHOOK_URL}/bot${process.env.BOT_TOKEN}`);
-  console.log(`Kanal: ${CHANNEL_USERNAME}`);
+  console.log(`✅ Server ${PORT}-portda ishlamoqda`);
+  console.log(`📢 Kanal: ${CHANNEL_USERNAME}`);
+  console.log(`🤖 AI: Hybrid (Gemini + OpenAI)`);
+  console.log(`📊 Kunlik limit: ${DAILY_LIMIT} savol/foydalanuvchi`);
 });
