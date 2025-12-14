@@ -1,6 +1,6 @@
 import TelegramBot from "node-telegram-bot-api";
 import OpenAI from "openai";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GoogleGenAI } from "@google/genai";
 import express from "express";
 
 const app = express();
@@ -19,9 +19,9 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const genAI = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 const geminiModel = genAI.getGenerativeModel({ 
-  model: "models/gemini-pro"  // To'liq nom bilan
+  model: "gemini-2.5-flash"
 });
 
 // Kanal sozlamalari
