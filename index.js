@@ -21,11 +21,7 @@ const openai = new OpenAI({
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const geminiModel = genAI.getGenerativeModel({ 
-  model: "gemini-1.5-pro",
-  generationConfig: {
-    temperature: 0.7,
-    maxOutputTokens: 1000,
-  }
+  model: "gemini-1.5-flash-latest"
 });
 
 // Kanal sozlamalari
