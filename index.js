@@ -22,11 +22,11 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-// Gemini (YANGI, TO‘G‘RI)
+// Gemini
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 const geminiModel = genAI.getGenerativeModel({
-  model: "gemini-2.5-flash", // ✅ tavsiya
+  model: "gemini-2.5-flash",
 });
 
 /* ================= CONFIG ================= */
@@ -50,9 +50,14 @@ app.post(`/bot${process.env.BOT_TOKEN}`, (req, res) => {
 
 async function checkChannelSubscription(userId) {
   try {
+    console.log(`🔍 [OBUNA] User ID: ${userId}, Kanal: ${CHANNEL_USERNAME}`);
     const member = await bot.getChatMember(CHANNEL_USERNAME, userId);
-    return ["member", "administrator", "creator"].includes(member.status);
-  } catch {
+    console.log(`📊 [OBUNA] Status: ${member.status}`);
+    const isSubscribed = ["member", "administrator", "creator"].includes(member.status);
+    console.log(`✅ [OBUNA] Natija: ${isSubscribed ? "Obunachi" : "Obuna emas"}`);
+    return isSubscribed;
+  } catch (error) {
+    console.error(`❌ [OBUNA] Xato: ${error.message}`);
     return false;
   }
 }
@@ -60,8 +65,12 @@ async function checkChannelSubscription(userId) {
 function checkDailyLimit(userId) {
   const key = `${userId}_${new Date().toDateString()}`;
   const count = userDailyLimits.get(key) || 0;
-  if (count >= DAILY_LIMIT) return false;
+  if (count >= DAILY_LIMIT) {
+    console.log(`⚠️ [LIMIT] User ${userId}: ${count}/${DAILY_LIMIT} - LIMIT`);
+    return false;
+  }
   userDailyLimits.set(key, count + 1);
+  console.log(`✅ [LIMIT] User ${userId}: ${count + 1}/${DAILY_LIMIT}`);
   return true;
 }
 
@@ -74,12 +83,17 @@ async function getGeminiResponse(question) {
 ҚОИДАЛАР:
 1. Фақат ўзбекча жавоб беринг
 2. Қисқа ва аниқ (3–5 абзац)
-3. Қонун моддаларига ҳавола
-4. Амалий йўл-йўриқ
-5. Керак бўлса адвокатга йўналтиринг
+3. Қонун/кодекс моддаларига ҳавола беринг
+4. Амалий йўл-йўриқ беринг (қандай ҳаракат қилиш керак)
+5. МУҲИМ: Жавоб охирида албатта қуйидагини қўшинг:
+   "⚖️ Мураккаб ҳолатларда профессионал адвокат маслаҳати тавсия этилади."
+
+АСОСИЙ ҚОНУНЛАР: Конституция, Фуқаролик кодекси (ФК), Оила кодекси (ОК), 
+Меҳнат кодекси (МК), Жиноят кодекси (ЖК), Маъмурий жавобгарлик кодекси.
 `;
 
   try {
+    console.log(`🤖 [GEMINI] Savol: ${question.substring(0, 50)}...`);
     const result = await geminiModel.generateContent({
       contents: [
         {
@@ -92,9 +106,11 @@ async function getGeminiResponse(question) {
       ],
     });
 
-    return result.response.text();
+    const answer = result.response.text();
+    console.log(`✅ [GEMINI] Javob uzunligi: ${answer.length} belgi`);
+    return answer;
   } catch (error) {
-    console.error("❌ Gemini xatosi:", error.message);
+    console.error(`❌ [GEMINI] Xato: ${error.message}`);
     throw error;
   }
 }
@@ -102,13 +118,24 @@ async function getGeminiResponse(question) {
 /* ================= OPENAI ================= */
 
 async function getOpenAIResponse(question) {
+  console.log(`🤖 [OPENAI] Savol: ${question.substring(0, 50)}...`);
+  
   const response = await openai.chat.completions.create({
     model: "gpt-4o-mini",
     messages: [
       {
         role: "system",
-        content:
-          "Сиз Ўзбекистон қонунчилиги бўйича юқори малакали юристсиз.",
+        content: `Сиз Ўзбекистон Республикаси қонунчилиги бўйича юқори малакали юристсиз.
+
+ВАЗИФАЛАР:
+1. Самимий ва эмпатик мулоқот
+2. Чуқур юридик таҳлил
+3. Кодекс моддаларига аниқ ҳавола
+4. Қадам-ба-қадам йўл-йўриқ
+5. МУҲИМ: Жавоб охирида албатта қуйидагини қўшинг:
+   "⚖️ Мураккаб ҳолатларда профессионал адвокат маслаҳати тавсия этилади."
+
+АСОСИЙ ҚОНУНЛАР: Конституция, Фуқаролик, Оила, Меҳнат, Жиноят кодекслари.`,
       },
       { role: "user", content: question },
     ],
@@ -116,30 +143,63 @@ async function getOpenAIResponse(question) {
     max_tokens: 2000,
   });
 
-  return response.choices[0].message.content;
+  const answer = response.choices[0].message.content;
+  console.log(`✅ [OPENAI] Javob uzunligi: ${answer.length} belgi`);
+  return answer;
 }
 
 /* ================= BOT LOGIC ================= */
+
+// DIAGNOSTIKA: Kanal ID ni topish uchun
+bot.on("channel_post", (msg) => {
+  console.log(`🔍 [KANAL ID TOPILDI]: ${msg.chat.id}`);
+  console.log(`📢 [KANAL NOMI]: ${msg.chat.title}`);
+  console.log(`📝 [XABAR]: ${msg.text}`);
+});
 
 bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
   const text = msg.text;
+  const firstName = msg.from.first_name || "Foydalanuvchi";
 
-  if (!text || text.startsWith("/")) return;
+  console.log(`📨 [MSG] User: ${firstName} (${userId}), Chat: ${chatId}, Text: "${text?.substring(0, 30)}..."`);
 
-  if (!(await checkChannelSubscription(userId))) {
+  if (!text || text.startsWith("/")) {
+    console.log(`⏭️ [MSG] O'tkazib yuborildi: buyruq yoki bo'sh`);
+    return;
+  }
+
+  // Obuna tekshiruvi
+  const isSubscribed = await checkChannelSubscription(userId);
+  
+  if (!isSubscribed) {
+    console.log(`🚫 [MSG] Obuna yo'q, xabar yuborilmoqda`);
     await bot.sendMessage(
       chatId,
-      `❗️ Илтимос, аввал каналга обуна бўлинг:\n${CHANNEL_USERNAME}`
+      `Ассалому алайкум, ${firstName}! 👋\n\n` +
+      `❗️ Ботдан фойдаланиш учун аввал каналимизга обуна бўлинг:\n\n` +
+      `📢 ${CHANNEL_USERNAME}\n\n` +
+      `Обуна бўлгандан кейин қайта уриниб кўринг.`,
+      {
+        reply_markup: {
+          inline_keyboard: [[
+            { text: "📢 Каналга обуна бўлиш", url: "https://t.me/termezadvokat" }
+          ]]
+        }
+      }
     );
     return;
   }
 
+  // Kunlik limit
   if (!checkDailyLimit(userId)) {
+    console.log(`🚫 [MSG] Limit tugadi`);
     await bot.sendMessage(
       chatId,
-      `❌ Кунлик лимит (${DAILY_LIMIT}) тугади. Эртага қайта уриниб кўринг.`
+      `${firstName}, афсуски, сиз бугунги кунлик лимитни (${DAILY_LIMIT} та савол) тўлдирдингиз. 😔\n\n` +
+      `Эртага қайта уриниб кўринг ёки каналимизда бошқа фойдали маълумотларни кўринг:\n` +
+      `${CHANNEL_USERNAME}`
     );
     return;
   }
@@ -147,29 +207,42 @@ bot.on("message", async (msg) => {
   await bot.sendChatAction(chatId, "typing");
 
   try {
-    let answer, ai;
+    let answer, aiUsed;
 
+    // Avval Gemini (bepul)
     try {
       answer = await getGeminiResponse(text);
-      ai = "Gemini 2.5 Flash";
-    } catch {
+      aiUsed = "Gemini";
+    } catch (geminiError) {
+      console.log(`⚠️ [AI] Gemini ishlamadi, OpenAI ga o'tish`);
       answer = await getOpenAIResponse(text);
-      ai = "OpenAI (fallback)";
+      aiUsed = "OpenAI (fallback)";
     }
 
-    await bot.sendMessage(
-      chatId,
-      `${answer}\n\n───────────\n🤖 _${ai}_`,
-      { parse_mode: "Markdown" }
-    );
+    console.log(`✅ [AI] Javob tayyor: ${aiUsed}`);
+    
+    // Foydalanuvchiga faqat javob (AI nomisiz)
+    await bot.sendMessage(chatId, answer);
+    
+    // Admin uchun log
+    console.log(`📤 [MSG] Yuborildi: ${aiUsed}`);
+
   } catch (err) {
-    await bot.sendMessage(chatId, "❌ Хатолик юз берди. Кейинроқ уриниб кўринг.");
+    console.error(`❌ [ERROR] ${err.message}`);
+    await bot.sendMessage(
+      chatId, 
+      "❌ Кечирасиз, жавоб беришда хатолик юз берди.\n\n" +
+      "Илтимос, бироз кутиб, қайта уриниб кўринг ёки каналимизга хабар қилинг:\n" +
+      `${CHANNEL_USERNAME}`
+    );
   }
 });
 
 /* ================= SERVER ================= */
 
 app.listen(PORT, () => {
-  console.log(`✅ Server ${PORT}-portda`);
-  console.log("🤖 Gemini 2.5 + OpenAI");
+  console.log(`✅ Server ${PORT}-portda ishlamoqda`);
+  console.log(`📢 Kanal: ${CHANNEL_USERNAME}`);
+  console.log(`🤖 AI: Gemini 2.5 Flash + OpenAI GPT-4o-mini (fallback)`);
+  console.log(`📊 Kunlik limit: ${DAILY_LIMIT} savol/foydalanuvchi`);
 });
