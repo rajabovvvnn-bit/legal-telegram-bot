@@ -20,6 +20,26 @@ const openai = new OpenAI({
 });
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+
+// Mavjud modellarni tekshirish
+async function checkAvailableModels() {
+  try {
+    console.log('🔍 Gemini API: mavjud modellarni tekshiryapman...');
+    const models = await genAI.listModels();
+    console.log('✅ Mavjud Gemini modellari:');
+    models.forEach(model => {
+      console.log(`  - ${model.name}`);
+    });
+    return models;
+  } catch (error) {
+    console.error('❌ Modellarni tekshirishda xato:', error.message);
+    return [];
+  }
+}
+
+// Ilk ishga tushganda modellarni tekshirish
+checkAvailableModels();
+
 const geminiModel = genAI.getGenerativeModel({ 
   model: "gemini-1.5-flash-latest"
 });
