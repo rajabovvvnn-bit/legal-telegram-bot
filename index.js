@@ -32,6 +32,7 @@ const geminiModel = genAI.getGenerativeModel({
 /* ================= CONFIG ================= */
 
 const CHANNEL_USERNAME = "@termezadvokat";
+const ADMIN_CHANNEL_ID = -1003417513618; // Admin kanali (Bot loglari)
 const DAILY_LIMIT = 10;
 const userDailyLimits = new Map();
 
@@ -150,13 +151,6 @@ async function getOpenAIResponse(question) {
 
 /* ================= BOT LOGIC ================= */
 
-// DIAGNOSTIKA: Kanal ID ni topish uchun
-bot.on("channel_post", (msg) => {
-  console.log(`🔍 [KANAL ID TOPILDI]: ${msg.chat.id}`);
-  console.log(`📢 [KANAL NOMI]: ${msg.chat.title}`);
-  console.log(`📝 [XABAR]: ${msg.text}`);
-});
-
 bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
@@ -224,7 +218,26 @@ bot.on("message", async (msg) => {
     // Foydalanuvchiga faqat javob (AI nomisiz)
     await bot.sendMessage(chatId, answer);
     
-    // Admin uchun log
+    // Admin kanaliga log yuborish
+    try {
+      const logMessage = 
+        `📊 YANGI SAVOL-JAVOB\n\n` +
+        `👤 Foydalanuvchi: ${firstName}\n` +
+        `🆔 User ID: ${userId}\n` +
+        `📅 Vaqt: ${new Date().toLocaleString('uz-UZ', { timeZone: 'Asia/Tashkent' })}\n\n` +
+        `❓ SAVOL:\n${text}\n\n` +
+        `💬 JAVOB (${aiUsed}):\n${answer.substring(0, 3000)}${answer.length > 3000 ? '...' : ''}\n\n` +
+        `────────────────\n` +
+        `🤖 AI: ${aiUsed}\n` +
+        `📊 Kunlik: ${userDailyLimits.get(`${userId}_${new Date().toDateString()}`) || 1}/${DAILY_LIMIT}`;
+      
+      await bot.sendMessage(ADMIN_CHANNEL_ID, logMessage);
+      console.log(`📤 [ADMIN] Log yuborildi`);
+    } catch (logError) {
+      console.error(`❌ [ADMIN] Log yuborishda xato: ${logError.message}`);
+    }
+    
+    // Admin uchun console log
     console.log(`📤 [MSG] Yuborildi: ${aiUsed}`);
 
   } catch (err) {
